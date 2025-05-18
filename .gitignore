@@ -3,4 +3,4 @@
 *bertopic*/
 *.dict*
 *cpgz*
-*__pycache__*/
+__pycache__/
