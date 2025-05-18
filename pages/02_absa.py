@@ -1,5 +1,3 @@
-# pages/02_absa.py
-
 import streamlit as st
 import pandas as pd
 import io

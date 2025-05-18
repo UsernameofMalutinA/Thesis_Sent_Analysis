@@ -13,8 +13,6 @@ import requests
 from sentence_transformers import SentenceTransformer
 
 
-
-
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
@@ -25,13 +23,13 @@ russian_stopwords = set(stopwords.words('russian'))
 
 device = 0 if torch.cuda.is_available() else -1
 
+
 sentiment_analyzer = pipeline(
     "sentiment-analysis",
     model="blanchefort/rubert-base-cased-sentiment",
     tokenizer="blanchefort/rubert-base-cased-sentiment",
     device=device
 )
-
 
 
 def preprocess_text(text: str) -> str:
@@ -75,13 +73,14 @@ if os.path.isdir(model_dir):
 else:
     print(f"⚠️ Model directory not found: {model_dir}")
 
-def deduplicate_topic_words(topic_words):
 
+def deduplicate_topic_words(topic_words):
     filtered = []
     for w in topic_words:
         if not any(w != other and w in other.split() for other in topic_words):
             filtered.append(w)
     return filtered
+
 
 def extract_topics_bertopic(text: str, top_n: int = 5) -> list[str]:
     if bert_model is None:
@@ -98,6 +97,7 @@ def extract_topics_bertopic(text: str, top_n: int = 5) -> list[str]:
 
 # ── TOPIC MODELLING ───────────────────────────────
 
+
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 VECT_PATH  = os.path.join(PROJECT_ROOT, "sklearn_lda_vectorizer_genvers.joblib")
 MODEL_PATH = os.path.join(PROJECT_ROOT, "sklearn_lda_model_genvers.joblib")
@@ -110,8 +110,6 @@ except Exception as e:
     vectorizer = None
     lda_model  = None
     print(f"⚠️ Could not load sklearn LDA/vectorizer: {e}")
-
-
 
 
 def extract_topics_lda(text: str, top_n: int = 5) -> list[str]:
@@ -136,14 +134,18 @@ def extract_topics(text: str, model_type: str, top_n: int = 5) -> list[str]:
 
 # ── ABSA FUNCTIONS ─────────────────────────────
 
+
 def analyze_topic_sentiment_flan():
     return []
 
 
 _PROMPT_INTRO = (
+    "Ты — эксперт по анализу тональности текстов русскоязычных отзывов о заведениях общественного питания. Ты работаешь на владельцев ресторанов и кафе, помогаешь им анализировать отзывы."
     "Твоя задача — по списку тем определить для каждой тональность: "
     "Положительное, Нейтральное или Негативное."
     "Формат вывода должен быть [Тема1]: [Тональность], для каждой данной темы. Объяснение в скобках писать не надо"
+    "В случае если по какому-то топику нет информации в тексте, то просто заполняй значением 'Нейтральное'"
+    "От того как ты определишь тональность зависит улучшат ли владельцы бизнеса условия для их клиентов"
 )
 
 _PROMPT_EXAMPLES = """
@@ -218,6 +220,8 @@ _PROMPT_EXAMPLES = """
 сервис: Положительно (официанты доброжелательные)
 
 """
+
+
 def analyze_topic_sentiment_gpt4(
     text: str,
     topics: list[str],
@@ -252,10 +256,6 @@ def analyze_topic_sentiment_gpt4(
             topic, sentiment = line.split(":", 1)
             result[topic.strip()] = sentiment.strip()
     return result
-
-
-
-
 
 
 def analyze_topic_sentiment_deepseek(
