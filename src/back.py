@@ -3,15 +3,12 @@ import re
 import nltk
 from nltk.corpus import stopwords
 from pymorphy3 import MorphAnalyzer
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
+from transformers import pipeline
 import torch
 from openai import OpenAI
 from bertopic import BERTopic
 import joblib
-import deepseek
-import requests
 from sentence_transformers import SentenceTransformer
-
 
 try:
     nltk.data.find('corpora/stopwords')
@@ -23,14 +20,12 @@ russian_stopwords = set(stopwords.words('russian'))
 
 device = 0 if torch.cuda.is_available() else -1
 
-
 sentiment_analyzer = pipeline(
     "sentiment-analysis",
     model="blanchefort/rubert-base-cased-sentiment",
     tokenizer="blanchefort/rubert-base-cased-sentiment",
     device=device
 )
-
 
 def preprocess_text(text: str) -> str:
     text = text.lower()
@@ -41,7 +36,6 @@ def preprocess_text(text: str) -> str:
         for tok in text.split()
         if tok not in russian_stopwords and len(tok) > 2
     )
-    
 
 def analyze_sentiment(text: str) -> str:
     if not text or len(text) < 3:
@@ -53,15 +47,12 @@ def analyze_sentiment(text: str) -> str:
         "NEGATIVE": "Негативное"
     }.get(label, "Нейтральное")
 
-
-
-# ──BERTopic ──────────────────────────────────────────
-
+# ── BERTopic ────────────────────────────────
 
 bert_model = None
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-model_dir   = os.path.join(project_root, "bertopic_final_model")
+model_dir = os.path.join(project_root, "bertopic_final_model")
 
 if os.path.isdir(model_dir):
     try:
@@ -73,14 +64,12 @@ if os.path.isdir(model_dir):
 else:
     print(f"⚠️ Model directory not found: {model_dir}")
 
-
 def deduplicate_topic_words(topic_words):
     filtered = []
     for w in topic_words:
         if not any(w != other and w in other.split() for other in topic_words):
             filtered.append(w)
     return filtered
-
 
 def extract_topics_bertopic(text: str, top_n: int = 5) -> list[str]:
     if bert_model is None:
@@ -91,12 +80,7 @@ def extract_topics_bertopic(text: str, top_n: int = 5) -> list[str]:
     cleaned = deduplicate_topic_words(top_words)
     return cleaned[:top_n]
 
-
-
-
-
-# ── TOPIC MODELLING ───────────────────────────────
-
+# ── LDA (sklearn) ───────────────────────────
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 VECT_PATH  = os.path.join(PROJECT_ROOT, "sklearn_lda_vectorizer_genvers.joblib")
@@ -110,7 +94,6 @@ except Exception as e:
     vectorizer = None
     lda_model  = None
     print(f"⚠️ Could not load sklearn LDA/vectorizer: {e}")
-
 
 def extract_topics_lda(text: str, top_n: int = 5) -> list[str]:
     if vectorizer is None or lda_model is None:
@@ -132,123 +115,49 @@ def extract_topics(text: str, model_type: str, top_n: int = 5) -> list[str]:
         return extract_topics_lda(text, top_n)
     return []
 
-# ── ABSA FUNCTIONS ─────────────────────────────
-
-
-def analyze_topic_sentiment_flan():
-    return []
-
+# ── ABSA PROMPTS ─────────────────────────────
 
 _PROMPT_INTRO = (
-    "Ты — эксперт по анализу тональности текстов русскоязычных отзывов о заведениях общественного питания. Ты работаешь на владельцев ресторанов и кафе, помогаешь им анализировать отзывы."
-    "Твоя задача — по списку тем определить для каждой тональность: "
-    "Положительное, Нейтральное или Негативное."
-    "Формат вывода должен быть [Тема1]: [Тональность], для каждой данной темы. Объяснение в скобках писать не надо"
-    "В случае если по какому-то топику нет информации в тексте, то просто заполняй значением 'Нейтральное'"
-    "От того как ты определишь тональность зависит улучшат ли владельцы бизнеса условия для их клиентов"
+    "Ты — менеджер ресторана. По списку тем определяй для каждой тональность: "
+    "Положительное, Нейтральное или Негативное. Формат вывода — [Тема]: [Тональность]."
+    "Если информации о теме нет — укажи 'Нейтральное'."
 )
-
 _PROMPT_EXAMPLES = """
-
 Отзыв: 'Еда была ужасная, но атмосфера отличная.'
 Темы: food, ambiance
 Ответ:
-Еда: Негативное (еда была ужасная)
-атмосфера: Положительное (атмосфера отличная)
+Еда: Негативное
+атмосфера: Положительное
 
 Отзыв: 'Очень медленное обслуживание, но вкусно.'
 Темы: сервис, еда
 Ответ:
-сервис: Негативное (обслуживание медленное)
-Еда: Положительное (вкусно)
-
-Отзыв: 'Прекрасный интерьер, хорошее обслуживание, быстро, ненавязчиво. Прекрасный интерьер, хорошее обслуживание, быстро, ненавязчиво. Кухня понравилась.'
-Темы: сервис, Еда, интерьер, атмосфера.
-Ответ:
-сервис: Положительное (хорошее обслуживание, быстро, ненавязчиво)
-Еда: Положительное (кухня понравилась)
-интерьер: Положительно (прекрасный интерьер)
-атмосфера: Нейтрально (отзыв не выделяет атмосферу явно)
-
-Отзыв: 'В ресторане было очень шумно, но официанты старались, а еда понравилась.'
-Темы: атмосфера, сервис, еда
-Ответ:
-атмосфера: Негативно (было очень шумно)
-сервис: Положительно (официанты старались)
-Еда: Положительно (еда понравилась)
-
-Отзыв: 'Интерьер современный, но блюда принесли холодными. Ждали заказ очень долго, ужас.' 
-Темы: интерьер, еда, сервис
-Ответ:
-интерьер: Положительно (интерьер современный)
-Еда: Негативно (блюда холодные)
-сервис: Негативно (ждали долго, ужас)
-
-Отзыв: 'Очень уютная атмосфера, вкусные десерты, но персонал невнимательный.'
-Темы: атмосфера, еда, сервис
-Ответ:
-атмосфера: Положительно (очень уютная атмосфера)
-Еда: Положительно (вкусные десерты)
-сервис: Негативно (персонал невнимательный)
-
-Отзыв: 'Обслуживание быстрое, интерьер обычный, блюда свежие и недорогие.'
-Темы: сервис, интерьер, еда
-Ответ:
-сервис: Положительно (обслуживание быстрое)
-интерьер: Нейтрально (интерьер обычный)
-Еда: Положительно (блюда свежие и недорогие)
-
-Отзыв: 'Официанты были грубыми, но салат был свежий и вкусный.'
-Темы: сервис, еда
-Ответ:
-сервис: Негативно (официанты грубые)
-Еда: Положительно (салат свежий и вкусный)
-
-Отзыв: 'Интерьер скучный, зато обслуживание вежливое, кухня ничем не выделяется.'
-Темы: интерьер, сервис, еда
-Ответ:
-интерьер: Негативно (интерьер скучный)
-сервис: Положительно (обслуживание вежливое)
-Еда: Нейтрально (кухня ничем не выделяется)
-
-Отзыв: 'В кафе уютно, официанты очень доброжелательные, но паста была пересолена и напитки дорогие.'
-Темы: атмосфера, сервис, еда, напитки
-Ответ:
-Еда: Негативно (паста была пересолена)
-напитки: Негативно (напитки дорогие)
-атмосфера: Положительно (в кафе уютно)
-сервис: Положительно (официанты доброжелательные)
-
+сервис: Негативное
+Еда: Положительное
 """
-
 
 def analyze_topic_sentiment_gpt4(
     text: str,
     topics: list[str],
     api_key: str
 ) -> dict[str, str]:
-
     client = OpenAI(api_key=api_key)
-
     topics_str = ", ".join(topics)
     user_prompt = (
         f"Отзыв: '{text}'\n"
         f"Темы: {topics_str}\n"
         "Ответ в формате 'тема: настроение' для каждой темы."
     )
-
     messages = [
         {"role": "system", "content": _PROMPT_INTRO},
         {"role": "system", "content": _PROMPT_EXAMPLES.strip()},
         {"role": "user",   "content": user_prompt}
     ]
-
     response = client.chat.completions.create(
         model="gpt-4.1-mini",
         messages=messages,
         temperature=0
     )
-
     content = response.choices[0].message.content.strip()
     result = {}
     for line in content.splitlines():
@@ -256,7 +165,6 @@ def analyze_topic_sentiment_gpt4(
             topic, sentiment = line.split(":", 1)
             result[topic.strip()] = sentiment.strip()
     return result
-
 
 def analyze_topic_sentiment_deepseek(
     text: str,
@@ -267,27 +175,23 @@ def analyze_topic_sentiment_deepseek(
         api_key=api_key,
         base_url="https://api.deepseek.com/v1"
     )
-
     topics_str = ", ".join(topics)
     user_prompt = (
         f"Отзыв: '{text}'\n"
         f"Темы: {topics_str}\n"
         "Определите настроение для каждой темы в формате 'тема: настроение'."
     )
-
     messages = [
         {"role": "system", "content": _PROMPT_INTRO},
         {"role": "system", "content": _PROMPT_EXAMPLES.strip()},
         {"role": "user",   "content": user_prompt}
     ]
-
     response = client.chat.completions.create(
         model="deepseek-chat",
         messages=messages,
         temperature=0,
         stream=False
     )
-
     content = response.choices[0].message.content.strip()
     result = {}
     for line in content.splitlines():
@@ -295,3 +199,34 @@ def analyze_topic_sentiment_deepseek(
             topic, sentiment = line.split(":", 1)
             result[topic.strip()] = sentiment.strip()
     return result
+
+# ── GENERATE APOLOGY ─────────────────────────
+
+def generate_apology_response(
+    text: str,
+    api_key: str,
+    provider: str = "gpt4"
+) -> str:
+    if provider == "deepseek":
+        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+        model_name = "deepseek-chat"
+    else:
+        client = OpenAI(api_key=api_key)
+        model_name = "gpt-4.1-mini"
+    system_prompt = (
+        "Ты — менеджер ресторана. Напиши короткий, вежливый и профессиональный ответ на отзыв клиента, "
+        "извиняясь за доставленные неудобства, выражая сожаление и обещая улучшить качество сервиса. "
+        "Если же отзыв положительный, то ответь в ключе благодарности"
+        "Обращение должно быть универсальным и не слишком длинным, максимум 2-3 предложения."
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user",   "content": f"Отзыв: '{text}'"}
+    ]
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=messages,
+        temperature=0.6
+    )
+    content = response.choices[0].message.content.strip()
+    return content
